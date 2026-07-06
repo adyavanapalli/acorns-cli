@@ -252,10 +252,14 @@ struct TaxCmd { #[command(subcommand)] sub: TaxSub }
 #[derive(Subcommand)]
 enum TaxSub {
     /// Tax statements for a year   [read]
-    Statements { #[arg(long)] year: i64, #[arg(long, default_value_t = 25)] limit: i64 },
+    Statements {
+        /// Tax year (e.g. 2023)
+        year: i64,
+    },
     /// Download a tax form PDF for a year (fetches a fresh link, saves to disk)   [read]
     Download {
-        #[arg(long)] year: i64,
+        /// Tax year (e.g. 2023)
+        year: i64,
         /// Statement id (required only if a year has multiple forms)
         #[arg(long)] id: Option<String>,
         /// Output path (default: <year>-<formType>-<id>.pdf)

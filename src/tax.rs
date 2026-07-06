@@ -6,10 +6,11 @@ use std::path::Path;
 
 pub fn run(g: &GlobalOpts, c: &TaxCmd) -> anyhow::Result<()> {
     match &c.sub {
-        TaxSub::Statements { year, limit } => cmd::read(
+        // PageInput.first is required by the query; a year never has many forms.
+        TaxSub::Statements { year } => cmd::read(
             g,
             "TaxCenterTaxStatementsByTaxYear",
-            json!({ "taxYear": year, "input": { "first": limit } }),
+            json!({ "taxYear": year, "input": { "first": 100 } }),
         ),
         TaxSub::Download { year, id, out } => download(g, *year, id.clone(), out.clone()),
     }
