@@ -19,8 +19,39 @@ pub fn run(ctx: &Ctx, op_name: &str, variables: Value) -> anyhow::Result<Value> 
     run_doc(ctx, op_name, &op.doc, variables)
 }
 
+/// Remove Apollo client-only directives the server rejects (`@connection(...)`,
+/// `@client`). The web app strips these before sending; we do the same.
+fn strip_client_directives(doc: &str) -> String {
+    let mut out = String::with_capacity(doc.len());
+    let mut rest = doc;
+    while let Some(at) = rest.find('@') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        if let Some(r) = after.strip_prefix("@connection") {
+            let r = r.trim_start();
+            if let Some(args) = r.strip_prefix('(') {
+                match args.find(')') {
+                    Some(close) => rest = &args[close + 1..],
+                    None => rest = "",
+                }
+            } else {
+                rest = r;
+            }
+        } else if let Some(r) = after.strip_prefix("@client") {
+            rest = r;
+        } else {
+            // Keep server directives (@include, @skip, @defer, …).
+            out.push('@');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Run an explicit document (used for auth ops that aren't in the app catalog).
 pub fn run_doc(ctx: &Ctx, op_name: &str, doc: &str, variables: Value) -> anyhow::Result<Value> {
+    let doc = strip_client_directives(doc);
     let body = json!([{ "operationName": op_name, "query": doc, "variables": variables }]);
 
     if ctx.dry_run {
