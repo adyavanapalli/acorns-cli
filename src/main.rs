@@ -2,7 +2,7 @@
 //!
 //! Command tree skeleton. Handlers are stubbed for now; wired incrementally.
 
-use clap::{Parser, Subcommand, Args, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 mod account;
 mod auth;
@@ -63,6 +63,11 @@ enum Command {
     Tax(TaxCmd),
     /// Escape hatch: run any cataloged GraphQL operation by name
     Raw(RawCmd),
+    /// Generate a shell completion script (e.g. `acorns completions bash`)
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 // ---------- auth ----------
@@ -293,6 +298,12 @@ fn main() {
         Command::Invest(c) => invest::run(g, c),
         Command::Funding(c) => funding::run(g, c),
         Command::Tax(c) => tax::run(g, c),
+        Command::Completions { shell } => {
+            let mut cmd = Cli::command();
+            let bin = cmd.get_name().to_string();
+            clap_complete::generate(*shell, &mut cmd, bin, &mut std::io::stdout());
+            Ok(())
+        }
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");
