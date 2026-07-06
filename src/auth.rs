@@ -3,7 +3,7 @@
 //! The login mutations live in the `oak` sign-in service (not the app catalog),
 //! so their documents are embedded here.
 
-use crate::{exec, net, session, AuthCmd, AuthSub, GlobalOpts, MfaMethod, PasswordSub};
+use crate::{exec, net, session, AuthCmd, AuthSub, GlobalOpts, MfaMethod};
 use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -30,9 +30,7 @@ pub fn run(g: &GlobalOpts, cmd: &AuthCmd) -> anyhow::Result<()> {
         AuthSub::Status => status(),
         AuthSub::Refresh => refresh(),
         AuthSub::Logout => logout(g),
-        AuthSub::Password { sub } => match sub {
-            PasswordSub::Change => password_change(g),
-        },
+        AuthSub::Password => password_change(g),
     }
 }
 
@@ -80,7 +78,7 @@ fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
     };
     let password = match std::env::var("ACORNS_PASSWORD") {
         Ok(p) if !p.is_empty() => p,
-        _ => rpassword::prompt_password("Password: ")?,
+        _ => read_password_masked("Password: ")?,
     };
     let udid = uuid::Uuid::new_v4().to_string();
     let c = net::client();
@@ -152,23 +150,30 @@ fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
         .unwrap_or("your device");
     eprintln!("A verification code was sent to {dest}.");
 
-    // Step 3: submit the code
-    let code = prompt("Enter the 6-digit code: ")?;
-    let vend = json!([{
-        "operationName": "VendAuthSession", "query": VEND,
-        "variables": { "input": {
-            "userId": user_id, "udid": udid, "rememberMe": true,
-            "challengeAnswerInput": { "challengeAnswer": code.trim(), "challengeId": challenge_id }
-        }}
-    }]);
-    let (v3, c3) = net::post_collect(&c, cookie_header(&jar), &vend)?;
-    apply(&mut jar, c3);
-    check_errors(&v3)?;
-    let vt = typename(&v3, "vendAuthSession").unwrap_or_default();
-    if vt != "AuthSession" {
-        anyhow::bail!("MFA failed (result: {vt})");
+    // Step 3: submit the code. Let the server drive retries — it returns
+    // AuthChallengeAnswerIncorrectException while the challenge is still open, and some
+    // other result (locked / expired / suspended) when it's done. We re-prompt on the
+    // former and surface anything else. (The API exposes no attempt counter to show.)
+    loop {
+        let code = prompt("Enter the 6-digit code: ")?;
+        let vend = json!([{
+            "operationName": "VendAuthSession", "query": VEND,
+            "variables": { "input": {
+                "userId": user_id, "udid": &udid, "rememberMe": true,
+                "challengeAnswerInput": { "challengeAnswer": code.trim(), "challengeId": &challenge_id }
+            }}
+        }]);
+        let (v3, c3) = net::post_collect(&c, cookie_header(&jar), &vend)?;
+        apply(&mut jar, c3);
+        check_errors(&v3)?;
+        match typename(&v3, "vendAuthSession").as_deref() {
+            Some("AuthSession") => return finish(jar, &udid),
+            Some("AuthChallengeAnswerIncorrectException") => {
+                eprintln!("Incorrect code — try again (Ctrl-C to cancel).");
+            }
+            other => anyhow::bail!("MFA failed (result: {})", other.unwrap_or("unknown")),
+        }
     }
-    finish(jar, &udid)
 }
 
 fn finish(jar: BTreeMap<String, String>, udid: &str) -> anyhow::Result<()> {
@@ -237,9 +242,9 @@ fn logout(g: &GlobalOpts) -> anyhow::Result<()> {
 }
 
 fn password_change(g: &GlobalOpts) -> anyhow::Result<()> {
-    let old = rpassword::prompt_password("Current password: ")?;
-    let new = rpassword::prompt_password("New password: ")?;
-    let confirm = rpassword::prompt_password("Confirm new password: ")?;
+    let old = read_password_masked("Current password: ")?;
+    let new = read_password_masked("New password: ")?;
+    let confirm = read_password_masked("Confirm new password: ")?;
     if new != confirm {
         anyhow::bail!("new passwords do not match");
     }
@@ -285,4 +290,56 @@ fn prompt(msg: &str) -> anyhow::Result<String> {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     Ok(line.trim().to_string())
+}
+
+/// Read a password, echoing `*` per keystroke (with backspace). Falls back to a
+/// plain line read when stdin isn't a TTY (e.g. piped input for automation).
+fn read_password_masked(msg: &str) -> anyhow::Result<String> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        let mut s = String::new();
+        std::io::stdin().read_line(&mut s)?;
+        return Ok(s.trim_end_matches(['\r', '\n']).to_string());
+    }
+    let mut err = std::io::stderr();
+    write!(err, "{msg}")?;
+    err.flush().ok();
+    crossterm::terminal::enable_raw_mode()?;
+    let outcome = masked_loop(&mut err);
+    let _ = crossterm::terminal::disable_raw_mode();
+    writeln!(err).ok();
+    outcome
+}
+
+fn masked_loop(err: &mut std::io::Stderr) -> anyhow::Result<String> {
+    use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use std::io::Write;
+    let mut pw = String::new();
+    loop {
+        if let Event::Key(k) = read()? {
+            if k.kind == KeyEventKind::Release {
+                continue;
+            }
+            match (k.code, k.modifiers) {
+                (KeyCode::Enter, _) => break,
+                (KeyCode::Char('c'), KeyModifiers::CONTROL) => anyhow::bail!("cancelled"),
+                (KeyCode::Char('d'), KeyModifiers::CONTROL) if pw.is_empty() => {
+                    anyhow::bail!("cancelled")
+                }
+                (KeyCode::Char(c), _) => {
+                    pw.push(c);
+                    write!(err, "*")?;
+                    err.flush().ok();
+                }
+                (KeyCode::Backspace, _) => {
+                    if pw.pop().is_some() {
+                        write!(err, "\x08 \x08")?; // erase the last '*'
+                        err.flush().ok();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(pw)
 }

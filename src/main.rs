@@ -9,6 +9,7 @@ mod auth;
 mod catalog;
 mod cmd;
 mod exec;
+mod funding;
 mod invest;
 mod net;
 mod output;
@@ -16,7 +17,6 @@ mod raw;
 mod safety;
 mod session;
 mod tax;
-mod transfer;
 
 #[derive(Parser)]
 #[command(name = "acorns", version, about = "Manage your Acorns account from the terminal")]
@@ -57,8 +57,8 @@ enum Command {
     Account(AccountCmd),
     /// Investing: balance, performance, deposits, round-ups, portfolio
     Invest(InvestCmd),
-    /// Transfers & funding sources
-    Transfer(TransferCmd),
+    /// Funding source & linked bank(s)
+    Funding(FundingCmd),
     /// Tax documents & statements
     Tax(TaxCmd),
     /// Escape hatch: run any cataloged GraphQL operation by name
@@ -76,17 +76,15 @@ enum AuthSub {
         /// MFA method to prefer
         #[arg(long, value_enum, default_value_t = MfaMethod::Sms)] method: MfaMethod,
     },
-    /// Show current session status   [read]
-    Status,
-    /// Rotate the access token   [write]
-    Refresh,
     /// Log out and clear the session   [write]
     Logout,
+    /// Rotate the access token   [write]
+    Refresh,
+    /// Show current session status   [read]
+    Status,
     /// Change account password   [destructive]
-    Password { #[command(subcommand)] sub: PasswordSub },
+    Password,
 }
-#[derive(Subcommand)]
-enum PasswordSub { Change }
 #[derive(Copy, Clone, ValueEnum)]
 enum MfaMethod { Sms, Email }
 
@@ -109,11 +107,11 @@ struct InvestCmd { #[command(subcommand)] sub: InvestSub }
 #[derive(Subcommand)]
 enum InvestSub {
     /// Invest account balance   [read]
-    Balance { #[arg(long)] id: Option<String> },
-    /// Detailed invest account   [read]
-    Account { #[arg(long)] id: Option<String> },
+    Balance,
+    /// Detailed invest account: portfolio, risk, theme, allocations, projection   [read]
+    Account,
     /// Performance over N days   [read]
-    Performance { #[arg(long, default_value_t = 30)] days: i64, #[arg(long)] id: Option<String> },
+    Performance { #[arg(long, default_value_t = 30)] days: i64 },
     /// Portfolio fund/holdings breakdown   [read]
     Holdings,
     /// Transaction history   [read]
@@ -129,15 +127,13 @@ enum InvestSub {
     Withdraw {
         /// Dollar amount to withdraw ($5 minimum)
         amount: f64,
-        /// Destination funding-source UUID (see `acorns transfer funding-source`)
-        #[arg(long)] to: String,
+        /// Destination funding-source UUID (default: your preferred/primary account; see `acorns transfer funding-source`)
+        #[arg(long)] to: Option<String>,
         /// Invest account id (defaults to your primary account)
         #[arg(long)] id: Option<String>,
     },
     /// Cancel a pending investment   [write]
     Cancel { investment_id: String },
-    /// Pause/resume recurring deposits   [write]
-    Deposits { #[arg(value_enum)] state: PauseState },
     /// Recurring investment settings   [read/write]
     Recurring { #[command(subcommand)] sub: RecurringSub },
     /// Portfolio management   [read/write]
@@ -145,8 +141,6 @@ enum InvestSub {
     /// Round-Ups   [read/write]
     Roundups { #[command(subcommand)] sub: RoundupsSub },
 }
-#[derive(Copy, Clone, ValueEnum)]
-enum PauseState { Pause, Resume }
 #[derive(Copy, Clone, ValueEnum)]
 enum Frequency { Daily, Weekly, Monthly }
 impl Frequency {
@@ -167,10 +161,21 @@ fn parse_day(s: &str) -> Result<i64, String> {
     s.parse::<i64>()
         .map_err(|_| format!("day must be 1–28 or \"last\" (got '{s}')"))
 }
+
+/// Parse a Round-Ups multiplier: `off` -> 1, else one of the UI options (2, 3, 10).
+fn parse_multiplier(s: &str) -> Result<i64, String> {
+    match s {
+        "off" | "1" => Ok(1),
+        "2" => Ok(2),
+        "3" => Ok(3),
+        "10" => Ok(10),
+        _ => Err(format!("multiplier must be off, 2, 3, or 10 (got '{s}')")),
+    }
+}
 #[derive(Subcommand)]
 enum RecurringSub {
-    /// Show current recurring settings   [read]
-    Show,
+    /// Current recurring investment settings   [read]
+    Status,
     /// Set recurring investment   [MONEY]
     Set {
         /// Dollar amount per investment (e.g. 5 or 5.00)
@@ -187,8 +192,8 @@ enum RecurringSub {
 }
 #[derive(Subcommand)]
 enum PortfolioSub {
-    /// Show available/selected portfolios   [read]
-    Show,
+    /// Available/selected portfolios   [read]
+    Status,
     /// Set portfolio by id   [write]
     Set { id: String },
     /// Update theme/risk   [write]
@@ -196,47 +201,44 @@ enum PortfolioSub {
 }
 #[derive(Subcommand)]
 enum RoundupsSub {
-    /// Round-up profile status   [read]
+    /// Round-Ups settings overview   [read]
     Status,
-    /// Enable/disable + multiplier   [write]
-    Set { #[arg(long)] enabled: Option<bool>, #[arg(long)] multiplier: Option<i64> },
-    /// Whole-Dollar Round-Ups amount in dollars ($0.00–$1.00, e.g. 0.50; 0 = off)   [write]
+    /// "Set to automatic" toggle   [write]
+    Automatic { #[arg(value_enum)] state: OnOff },
+    /// Multiplier: off, 2, 3, or 10   [write]
+    Multiplier { #[arg(value_parser = parse_multiplier)] value: i64 },
+    /// Whole-Dollar Round-Ups amount ($0.00–$1.00, e.g. 0.50; 0 = off)   [write]
     WholeDollar { amount: f64 },
+    /// Linked round-up accounts   [read/write]
+    Accounts { #[command(subcommand)] sub: RoundupAccountsSub },
     /// Round-up history   [read]
     History { #[arg(long)] after: Option<String> },
 }
+#[derive(Subcommand)]
+enum RoundupAccountsSub {
+    /// List linked round-up accounts + their enabled state   [read]
+    Status,
+    /// Enable a linked account for round-ups   [write]
+    Enable { id: String },
+    /// Disable a linked account for round-ups   [write]
+    Disable { id: String },
+}
+#[derive(Copy, Clone, ValueEnum)]
+enum OnOff { On, Off }
 
-// ---------- transfer ----------
+// ---------- funding ----------
 #[derive(Args)]
-struct TransferCmd { #[command(subcommand)] sub: TransferSub }
+struct FundingCmd { #[command(subcommand)] sub: FundingSub }
 #[derive(Subcommand)]
-enum TransferSub {
-    /// Create a transfer   [MONEY]
-    Create { #[arg(long)] from: String, #[arg(long)] to: String, #[arg(long)] amount: f64 },
-    /// List transferable-from (and optionally -to) accounts   [read]
-    Accounts { #[arg(long)] to: Option<String> },
-    /// Show funding sources   [read]
-    FundingSource { #[command(subcommand)] sub: Option<FundingSourceSub> },
-    /// Estimate settlement dates   [read]
-    Estimate { #[arg(long)] created_at: Option<String> },
-    /// Search financial institutions   [read]
-    Institutions { #[arg(long)] search: Option<String> },
-    /// Recurring transfers   [read/write]
-    Recurring { #[command(subcommand)] sub: TransferRecurringSub },
-    /// Unlink a linked account   [write]
-    Unlink { linked_account_id: String },
-}
-#[derive(Subcommand)]
-enum FundingSourceSub {
-    /// Set primary funding source   [write]
+enum FundingSub {
+    /// Funding source(s) & linked bank(s)   [read]
+    Status,
+    /// Set the primary funding source (sub-account id from `funding status`)   [write]
     SetPrimary { id: String },
-}
-#[derive(Subcommand)]
-enum TransferRecurringSub {
-    /// List recurring transfers   [read]
-    List,
-    /// Cancel a recurring transfer   [write]
-    Cancel { id: String },
+    /// Allow or pause transfers ("Allow transfers" toggle; global)   [write]
+    Allow { #[arg(value_enum)] state: OnOff },
+    /// Unlink a bank connection (linkedAccountId from `funding status`; re-link in the app)   [destructive]
+    Unlink { linked_account_id: String },
 }
 
 // ---------- tax ----------
@@ -289,7 +291,7 @@ fn main() {
         Command::Auth(c) => auth::run(g, c),
         Command::Account(c) => account::run(g, c),
         Command::Invest(c) => invest::run(g, c),
-        Command::Transfer(c) => transfer::run(g, c),
+        Command::Funding(c) => funding::run(g, c),
         Command::Tax(c) => tax::run(g, c),
     };
     if let Err(e) = result {

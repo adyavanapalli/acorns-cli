@@ -27,6 +27,31 @@ pub fn write(
     Ok(())
 }
 
+/// Resolve the default withdrawal funding source: preferred → primary → the only one.
+/// Returns its uuid. Runs even under --dry-run (it's a read), so the printed request is real.
+pub fn funding_source_uuid(g: &GlobalOpts) -> anyhow::Result<String> {
+    let read_ctx = exec::Ctx { dry_run: false, verbose: g.verbose };
+    let data = exec::run(&read_ctx, "FundingSourceAccountsQuery", json!({}))?;
+    let accts = data
+        .get("fundingSourceAccounts")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if accts.is_empty() {
+        anyhow::bail!("no funding source found — specify --to <uuid> (see `acorns transfer funding-source`)");
+    }
+    let pick = accts
+        .iter()
+        .find(|a| a.get("preferredWithdrawalAccount").and_then(|b| b.as_bool()) == Some(true))
+        .or_else(|| accts.iter().find(|a| a.get("role").and_then(|r| r.as_str()) == Some("primaryFunding")))
+        .or_else(|| if accts.len() == 1 { accts.first() } else { None })
+        .ok_or_else(|| anyhow::anyhow!("multiple funding sources — specify --to <uuid>"))?;
+    pick.get("uuid")
+        .and_then(|u| u.as_str())
+        .map(String::from)
+        .ok_or_else(|| anyhow::anyhow!("funding source is missing a uuid"))
+}
+
 /// Resolve the primary Invest account id (for ops that require it).
 /// In dry-run mode, returns a placeholder so the request shape is still printable.
 pub fn invest_account_id(g: &GlobalOpts) -> anyhow::Result<String> {
