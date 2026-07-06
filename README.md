@@ -7,7 +7,7 @@
 ---
 
 `acorns` talks to Acorns' private GraphQL API so you can check balances, move money,
-manage Round-Ups, and pull tax documents, all from your terminal. Output is JSON, so
+manage round-ups, and pull tax documents, all from your terminal. Output is JSON, so
 it pipes cleanly into `jq`.
 
 > [!WARNING]
