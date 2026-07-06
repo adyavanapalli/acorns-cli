@@ -118,10 +118,22 @@ enum InvestSub {
     Holdings,
     /// Transaction history   [read]
     History { #[arg(long, default_value_t = 25)] limit: i64, #[arg(long)] after: Option<String>, #[arg(long)] exclude_fees: bool },
-    /// One-time deposit   [MONEY]
-    Deposit { amount: f64, #[arg(long)] id: Option<String> },
-    /// Withdraw to a funding source   [MONEY]
-    Withdraw { amount: f64, #[arg(long)] to: String, #[arg(long)] id: Option<String> },
+    /// Deposit into Invest ("Transfer in")   [MONEY]
+    Deposit {
+        /// Dollar amount to invest
+        amount: f64,
+        /// Invest account id (defaults to your primary account)
+        #[arg(long)] id: Option<String>,
+    },
+    /// Withdraw from Invest to a funding source ("Transfer out")   [MONEY]
+    Withdraw {
+        /// Dollar amount to withdraw ($5 minimum)
+        amount: f64,
+        /// Destination funding-source UUID (see `acorns transfer funding-source`)
+        #[arg(long)] to: String,
+        /// Invest account id (defaults to your primary account)
+        #[arg(long)] id: Option<String>,
+    },
     /// Cancel a pending investment   [write]
     Cancel { investment_id: String },
     /// Pause/resume recurring deposits   [write]
