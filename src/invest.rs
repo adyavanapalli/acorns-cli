@@ -1,7 +1,7 @@
 //! `acorns invest` — investing reads + writes/money ops.
 
 use crate::safety::Tier;
-use crate::{cmd, GlobalOpts, InvestCmd, InvestSub, OnOff, PauseState, PortfolioSub, RecurringSub, RoundupsSub};
+use crate::{cmd, GlobalOpts, InvestCmd, InvestSub, PauseState, PortfolioSub, RecurringSub, RoundupsSub};
 use serde_json::json;
 
 pub fn run(g: &GlobalOpts, c: &InvestCmd) -> anyhow::Result<()> {
@@ -42,9 +42,9 @@ pub fn run(g: &GlobalOpts, c: &InvestCmd) -> anyhow::Result<()> {
             RecurringSub::Show => cmd::read(g, "recurringInvestmentSettings", json!({ "product": "INVEST" })),
             RecurringSub::Set { amount, day, frequency, id } => {
                 let acct = match id { Some(i) => i.clone(), None => cmd::invest_account_id(g)? };
-                cmd::write(g, Tier::Money, &format!("set recurring ${amount:.2} {frequency} on day {day}"),
+                cmd::write(g, Tier::Money, &format!("set recurring ${amount:.2} {} on day {day}", frequency.as_api()),
                     "UpdateRecurringInvestment",
-                    json!({ "amount": amount, "day": day, "frequency": frequency, "investmentAccountId": acct }))
+                    json!({ "amount": amount, "day": day, "frequency": frequency.as_api(), "investment_account_id": acct }))
             }
             RecurringSub::Stop { .. } => cmd::write(g, Tier::Write, "stop recurring investment", "StopRecurringInvestment", json!({})),
         },
@@ -65,10 +65,9 @@ pub fn run(g: &GlobalOpts, c: &InvestCmd) -> anyhow::Result<()> {
                 if let Some(m) = multiplier { input["multiplier"] = json!(m); }
                 cmd::write(g, Tier::Write, "update round-ups", "UpdateRoundUpEnabledAndMultiplier", json!({ "input": input }))
             }
-            RoundupsSub::WholeDollar { state } => {
-                let amt = if matches!(state, OnOff::On) { 1.0 } else { 0.0 };
-                cmd::write(g, Tier::Write, "set whole-dollar round-ups", "UpdateWholeDollarRoundup",
-                    json!({ "input": { "wholeDollarAmount": amt } }))
+            RoundupsSub::WholeDollar { amount } => {
+                cmd::write(g, Tier::Write, &format!("set Whole-Dollar Round-Ups to ${amount:.2}"),
+                    "UpdateWholeDollarRoundup", json!({ "input": { "wholeDollarAmount": amount } }))
             }
             RoundupsSub::History { .. } => cmd::read(g, "RoundUpsPageCacheUpdate", json!({})),
         },

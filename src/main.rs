@@ -135,12 +135,41 @@ enum InvestSub {
 }
 #[derive(Copy, Clone, ValueEnum)]
 enum PauseState { Pause, Resume }
+#[derive(Copy, Clone, ValueEnum)]
+enum Frequency { Daily, Weekly, Monthly }
+impl Frequency {
+    fn as_api(self) -> &'static str {
+        match self {
+            Frequency::Daily => "daily",
+            Frequency::Weekly => "weekly",
+            Frequency::Monthly => "monthly",
+        }
+    }
+}
+
+/// Parse a recurring-investment day: `last` -> -1 (last day of month), else an integer.
+fn parse_day(s: &str) -> Result<i64, String> {
+    if s.eq_ignore_ascii_case("last") {
+        return Ok(-1);
+    }
+    s.parse::<i64>()
+        .map_err(|_| format!("day must be 1–28 or \"last\" (got '{s}')"))
+}
 #[derive(Subcommand)]
 enum RecurringSub {
     /// Show current recurring settings   [read]
     Show,
     /// Set recurring investment   [MONEY]
-    Set { #[arg(long)] amount: f64, #[arg(long)] day: i64, #[arg(long)] frequency: String, #[arg(long)] id: Option<String> },
+    Set {
+        /// Dollar amount per investment (e.g. 5 or 5.00)
+        #[arg(long)] amount: f64,
+        /// Day of month: 1–28, or "last" for the last day (monthly). Day of week for weekly; ignored for daily
+        #[arg(long, value_parser = parse_day)] day: i64,
+        /// How often to invest
+        #[arg(long, value_enum)] frequency: Frequency,
+        /// Invest account id (defaults to your primary account)
+        #[arg(long)] id: Option<String>,
+    },
     /// Stop recurring investment   [write]
     Stop { #[arg(long)] id: Option<String> },
 }
@@ -159,13 +188,11 @@ enum RoundupsSub {
     Status,
     /// Enable/disable + multiplier   [write]
     Set { #[arg(long)] enabled: Option<bool>, #[arg(long)] multiplier: Option<i64> },
-    /// Whole-dollar round-ups on/off   [write]
-    WholeDollar { #[arg(value_enum)] state: OnOff },
+    /// Whole-Dollar Round-Ups amount in dollars ($0.00–$1.00, e.g. 0.50; 0 = off)   [write]
+    WholeDollar { amount: f64 },
     /// Round-up history   [read]
     History { #[arg(long)] after: Option<String> },
 }
-#[derive(Copy, Clone, ValueEnum)]
-enum OnOff { On, Off }
 
 // ---------- transfer ----------
 #[derive(Args)]
