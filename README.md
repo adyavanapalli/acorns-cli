@@ -43,12 +43,28 @@ Commands:
 
 Options:
   -y, --yes      Skip confirmation prompts (money/destructive ops)
-      --dry-run  Print the GraphQL request that would be sent; do not execute
-  -v, --verbose  Verbose: log operation name, variables, timing
+      --dry-run  Print the GraphQL request that would be sent; no network I/O, ever
+  -v, --verbose  Verbose: log operation name, variables (secrets redacted), timing
   -h, --help     Print help
   -V, --version  Print version
 ```
 
-Run `acorns <command> --help` for a group's subcommands. Your session is stored
-locally at `~/.config/acorns-cli/session.json` (chmod `600`).
-</content>
+Run `acorns <command> --help` for a group's subcommands.
+
+## Safety notes
+
+- **`--dry-run` is always offline.** It prints the request(s) that would be sent,
+  performs no network I/O, never prompts for secrets (placeholders are printed
+  instead), and never changes local state. Ids that would need a live lookup appear
+  as placeholders like `<FUNDING_SOURCE_ID>`.
+- **Money and destructive operations ask for confirmation** unless you pass
+  `-y`/`--yes`. Plain writes proceed silently; reads are always safe.
+- **Session storage.** Your session lives at `~/.config/acorns-cli/session.json`,
+  created with owner-only permissions (`0600`) and written atomically.
+- **One token family per profile.** Don't share an account session with a logged-in
+  browser: Acorns rotates refresh tokens, and the CLI and browser will invalidate
+  each other's sessions.
+
+## License
+
+[MIT](LICENSE)

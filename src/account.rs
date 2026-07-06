@@ -1,15 +1,12 @@
 //! `acorns account` — read-only overview commands.
 
-use crate::{exec, output, AccountCmd, AccountSub, GlobalOpts};
+use crate::{AccountCmd, AccountSub, GlobalOpts, cmd};
 use serde_json::json;
 
-pub fn run(g: &GlobalOpts, cmd: &AccountCmd) -> anyhow::Result<()> {
-    let ctx = g.ctx();
-    let data = match &cmd.sub {
-        AccountSub::Value => exec::run(&ctx, "ProductAccountValues", json!({ "product": "INVEST" }))?,
-        AccountSub::List => exec::run(&ctx, "AllInvestmentAccounts", json!({}))?,
-        AccountSub::Billing => exec::run(&ctx, "nextBillingDate", json!({}))?,
-    };
-    output::emit(g, &data);
-    Ok(())
+pub fn run(g: &GlobalOpts, c: &AccountCmd) -> anyhow::Result<()> {
+    match &c.sub {
+        AccountSub::Value => cmd::read(g, "ProductAccountValues", &json!({ "product": "INVEST" })),
+        AccountSub::List => cmd::read(g, "AllInvestmentAccounts", &json!({})),
+        AccountSub::Billing => cmd::read(g, "nextBillingDate", &json!({})),
+    }
 }

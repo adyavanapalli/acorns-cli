@@ -3,9 +3,9 @@
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
-const CATALOG_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/catalog.json"));
+const CATALOG_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/catalog.json"));
 
 #[derive(Deserialize)]
 pub struct Catalog {
@@ -45,6 +45,13 @@ impl Var {
     }
 }
 
-pub fn load() -> Catalog {
-    serde_json::from_str(CATALOG_JSON).expect("embedded catalog.json must be valid")
+/// Parse the embedded catalog once and cache it for the process lifetime
+/// (it is ~500 KB of JSON; some commands consult it more than once).
+pub fn load() -> &'static Catalog {
+    static CATALOG: OnceLock<Catalog> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        // The catalog is a compile-time asset: failing to parse it is a build
+        // defect, not a runtime condition — abort loudly.
+        serde_json::from_str(CATALOG_JSON).expect("embedded catalog.json must be valid")
+    })
 }

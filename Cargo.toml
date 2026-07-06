@@ -1,8 +1,17 @@
 [package]
 name = "acorns-cli"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+# Floor derived from the dependency graph (icu_* declare 1.86); edition 2024
+# itself needs 1.85. Compile-tested on newer stable only.
+rust-version = "1.86"
 description = "Unofficial CLI for managing an Acorns account via its GraphQL API"
+repository = "https://github.com/adyavanapalli/acorns-cli"
+license = "MIT"
+keywords = ["acorns", "cli", "finance", "graphql", "investing"]
+categories = ["command-line-utilities", "finance"]
+# Unofficial client for a private API — not intended for crates.io.
+publish = false
 
 [[bin]]
 name = "acorns"
@@ -18,3 +27,14 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 crossterm = "0.28"
+zeroize = "1"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# A binary crate: every function is an internal API; error/panic docs on each
+# `pub fn` would be noise rather than a contract.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
