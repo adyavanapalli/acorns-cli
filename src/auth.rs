@@ -68,19 +68,27 @@ fn node<'a>(v: &'a Value, field: &str) -> Option<&'a Value> {
 }
 
 fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
-    // Resolve credentials: flag > env (ACORNS_USERNAME/ACORNS_PASSWORD) > prompt.
+    // Resolve email: --email flag > stored session > interactive prompt. The
+    // password is always prompted (never stored, never read from the environment).
+    let stored = session::load();
     let email = match email.filter(|s| !s.is_empty()) {
         Some(e) => e,
-        None => match std::env::var("ACORNS_USERNAME") {
-            Ok(e) if !e.is_empty() => e,
-            _ => prompt("Email: ")?,
+        None => match stored
+            .as_ref()
+            .and_then(|s| s.email.clone())
+            .filter(|s| !s.is_empty())
+        {
+            Some(e) => e,
+            None => prompt("Email: ")?,
         },
     };
-    let password = match std::env::var("ACORNS_PASSWORD") {
-        Ok(p) if !p.is_empty() => p,
-        _ => read_password_masked("Password: ")?,
-    };
-    let udid = uuid::Uuid::new_v4().to_string();
+    let password = read_password_masked("Password: ")?;
+    // Reuse the stored device id so repeat logins keep one identity; else mint one.
+    let udid = stored
+        .as_ref()
+        .map(|s| s.udid.clone())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let c = net::client();
     let mut jar: BTreeMap<String, String> = BTreeMap::new();
 
@@ -89,7 +97,7 @@ fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
         "operationName": "ValidateCredentials", "query": VALIDATE,
         "variables": { "input": {
             "credentialsType": "USER", "udid": udid,
-            "nativeLoginInput": { "email": email, "password": password }
+            "nativeLoginInput": { "email": email.clone(), "password": password }
         }}
     }]);
     let (v1, c1) = net::post_collect(&c, cookie_header(&jar), &vbody)?;
@@ -102,8 +110,9 @@ fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
     match t.as_str() {
         "AuthSession" => {
             // No MFA required — tokens delivered via Set-Cookie.
-            return finish(jar, &udid);
+            return finish(jar, &udid, &email);
         }
+        "InvalidCredentialsException" => anyhow::bail!("invalid email or password"),
         "UserSuspendedException" => anyhow::bail!("account is suspended"),
         "ValidateCredentialsSuccess" => {}
         other => anyhow::bail!("unexpected credential result: {other}"),
@@ -167,7 +176,7 @@ fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
         apply(&mut jar, c3);
         check_errors(&v3)?;
         match typename(&v3, "vendAuthSession").as_deref() {
-            Some("AuthSession") => return finish(jar, &udid),
+            Some("AuthSession") => return finish(jar, &udid, &email),
             Some("AuthChallengeAnswerIncorrectException") => {
                 eprintln!("Incorrect code — try again (Ctrl-C to cancel).");
             }
@@ -176,13 +185,14 @@ fn login(email: Option<String>, method: MfaMethod) -> anyhow::Result<()> {
     }
 }
 
-fn finish(jar: BTreeMap<String, String>, udid: &str) -> anyhow::Result<()> {
+fn finish(jar: BTreeMap<String, String>, udid: &str, email: &str) -> anyhow::Result<()> {
     let get = |k: &str| jar.get(k).cloned().unwrap_or_default();
     let s = session::Session {
         access_token: get("acornsweb_access_token"),
         refresh_token: get("acornsweb_refresh_token"),
         csrf_token: get("acornsweb_csrf_token"),
         udid: udid.to_string(),
+        email: Some(email.to_string()),
     };
     if s.access_token.is_empty() || s.refresh_token.is_empty() {
         anyhow::bail!("login did not yield tokens (no Set-Cookie)");
@@ -209,6 +219,9 @@ fn status() -> anyhow::Result<()> {
         }
         Some(s) => {
             println!("logged in");
+            if let Some(email) = s.email.as_deref().filter(|e| !e.is_empty()) {
+                println!("  email: {email}");
+            }
             println!("  udid: {}", s.udid);
             match jwt_exp(&s.access_token) {
                 Some(exp) => {

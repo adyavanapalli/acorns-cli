@@ -11,6 +11,9 @@ pub struct Session {
     pub csrf_token: String,
     #[serde(default)]
     pub udid: String,
+    /// Email used at login, kept so re-login can default to it (never a password).
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 fn config_dir() -> PathBuf {
